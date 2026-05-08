@@ -1,18 +1,10 @@
-"""
-Features.py  —  Shared feature engineering for PokerML
-Imported by DataGen.py (data generation) and app.py (inference).
-Keeping this in one place guarantees training and inference are always identical.
-"""
-
 from treys import Evaluator, Card
 
 evaluator = Evaluator()
 
-# ── CONSTANTS ─────────────────────────────────────────────────────────────────
-
+# CONSTANTS
 POSITIONS      = ["early", "middle", "late", "button"]
 OPPONENT_TYPES = ["tight_passive", "tight_aggressive", "loose_passive", "loose_aggressive"]
-
 OPP_VPIP = {
     "tight_passive":    0.15,
     "tight_aggressive": 0.20,
@@ -26,8 +18,7 @@ OPP_AGGRESSION = {
     "loose_aggressive": 0.80,
 }
 
-# ── CARD HELPERS ──────────────────────────────────────────────────────────────
-
+# CARD UTILITIES
 def card_rank(c: int) -> int:
     """Treys card int → rank as 2–14."""
     return Card.get_rank_int(c) + 2
@@ -36,8 +27,7 @@ def card_suit(c: int) -> int:
     """Treys card int → suit int (1, 2, 4, 8)."""
     return Card.get_suit_int(c)
 
-# ── CHEN SCORE ────────────────────────────────────────────────────────────────
-
+# CHEN SCORE
 def chen_score_normalized(r1: int, r2: int, suited: int) -> float:
     """
     Chen formula normalised to [0, 1].
@@ -50,78 +40,55 @@ def chen_score_normalized(r1: int, r2: int, suited: int) -> float:
         4: 2, 3: 1.5, 2: 1,
     }
     score = score_map.get(high, 1.0)
-
     if r1 == r2:
         score = max(score * 2, 5)
-
     if suited:
         score += 2
-
     gap = high - low if r1 != r2 else 0
     score -= {0: 0, 1: 0, 2: 1, 3: 2, 4: 4}.get(min(gap, 4), 5)
-
     if 0 < gap <= 2:
         score += 1
-
     return round(max(0.0, min(1.0, score / 20.0)), 4)
 
-# ── MULTIWAY EQUITY ───────────────────────────────────────────────────────────
-
+# MULTIWAY EQUITY
 def multiway_equity_factor(num_active: int) -> float:
-    """
-    Discount equity vs extra opponents.
-    NOT applied to near-nut hands (hand_strength >= 0.95).
-    """
+    
+    #Unapplied to near-nut hands (hand_strength >= 0.95).
     return 0.85 ** max(0, num_active - 2)
 
-# ── HAND STRENGTH ─────────────────────────────────────────────────────────────
-
+# HAND STRENGTH
 def get_hand_strength(board: list, hole: list, active_players: int) -> tuple:
-    """
-    Returns (hand_class, adjusted_hand_strength).
-    Preflop  → Chen score x multiway factor.
-    Postflop → treys evaluator; multiway factor skipped for near-nut hands (>= 0.95)
-               so Royal Flush / Quads / etc. are never penalised.
-    """
+    # Preflop  → Chen score x multiway factor.
+    # Postflop → treys evaluator; multiway factor skipped for near-nut hands (>= 0.95)
     if not board:
         r1, r2  = card_rank(hole[0]), card_rank(hole[1])
         suited  = int(card_suit(hole[0]) == card_suit(hole[1]))
         base    = chen_score_normalized(max(r1, r2), min(r1, r2), suited)
         return 9, round(base * multiway_equity_factor(active_players), 4)
-
     score         = evaluator.evaluate(board, hole)
     hand_class    = evaluator.get_rank_class(score)
     hand_strength = 1.0 - (score / 7462.0)
-
-    # FIX #6: Near-nut hands are unbeatable — more opponents = bigger pot, not less equity.
-    # This guard must exist in BOTH training (DataGen) and inference (app.py).
     if hand_strength >= 0.95:
         adjusted = hand_strength
     else:
         adjusted = hand_strength * multiway_equity_factor(active_players)
-
     return hand_class, round(adjusted, 4)
 
-# ── HAND ABSTRACTION ─────────────────────────────────────────────────────────
-
+# HAND ABSTRACTION
 def hand_abstraction_features(board: list, hole: list) -> dict:
-    """
-    Treys hand_class codes:
-      1=Straight Flush, 2=Quads, 3=Full House, 4=Flush, 5=Straight,
-      6=Set, 7=Two Pair, 8=One Pair, 9=High Card
-    """
+    # Treys hand_class codes:
+    #   1=Straight Flush, 2=Quads, 3=Full House, 4=Flush, 5=Straight,
+    #   6=Set, 7=Two Pair, 8=One Pair, 9=High Card
     if not board:
         return {
             "is_overpair": 0, "is_top_pair": 0, "is_middle_pair": 0,
             "is_set": 0, "is_two_pair": 0, "is_straight": 0,
             "is_flush": 0, "hand_abstraction": 0,
         }
-
     board_ranks = sorted([card_rank(c) for c in board])
     hole_ranks  = [card_rank(c) for c in hole]
     score       = evaluator.evaluate(board, hole)
     hand_class  = evaluator.get_rank_class(score)
-
     is_pair        = int(hand_class == 8)
     max_board      = max(board_ranks)
     mid_board      = sorted(board_ranks)[len(board_ranks) // 2]
@@ -133,10 +100,9 @@ def hand_abstraction_features(board: list, hole: list) -> dict:
     is_two_pair = int(hand_class == 7)
     is_straight = int(hand_class == 5)
     is_flush    = int(hand_class == 4)
-
-    if hand_class <= 3:          # SF, Quads, Full House
+    if hand_class <= 3:# SF, Quads, Full House
         tier = 4
-    elif hand_class <= 7:        # Flush, Straight, Set, Two Pair
+    elif hand_class <= 7:# Flush, Straight, Set, Two Pair
         tier = 3
     elif is_overpair or is_top_pair:
         tier = 2
@@ -144,16 +110,13 @@ def hand_abstraction_features(board: list, hole: list) -> dict:
         tier = 1
     else:
         tier = 0
-
     return {
         "is_overpair": is_overpair, "is_top_pair": is_top_pair,
         "is_middle_pair": is_middle_pair, "is_set": is_set,
         "is_two_pair": is_two_pair, "is_straight": is_straight,
         "is_flush": is_flush, "hand_abstraction": tier,
     }
-
-# ── FLUSH FEATURES ────────────────────────────────────────────────────────────
-
+# FLUSH FEATURES
 def flush_features(hole: list, board: list) -> dict:
     if not board:
         return {"max_suit": 0, "flush_draw": 0, "flush_made": 0, "board_flush_pressure": 0}
@@ -169,8 +132,7 @@ def flush_features(hole: list, board: list) -> dict:
         "board_flush_pressure": board_max,
     }
 
-# ── STRAIGHT FEATURES ─────────────────────────────────────────────────────────
-
+# ─STRAIGHT FEATURES
 def straight_features(hole: list, board: list) -> dict:
     all_cards = hole + board
     ranks     = sorted(set(card_rank(c) for c in all_cards))
@@ -182,9 +144,9 @@ def straight_features(hole: list, board: list) -> dict:
         if len(window) >= 4:
             span = window[-1] - window[0]
             if span == 3:
-                open_ended = 1          # OESD
+                open_ended = 1 # OESD
             elif span == 4 and len(window) == 4:
-                gutshot = 1             # GSD
+                gutshot = 1 # GSD
     fd = flush_features(hole, board)["flush_draw"]
     if open_ended and fd:
         draw_type = 3
@@ -201,10 +163,9 @@ def straight_features(hole: list, board: list) -> dict:
         "draw_type":     draw_type,
     }
 
-# ── BOARD TEXTURE ─────────────────────────────────────────────────────────────
-
+# BOARD TEXTURE
 def board_wetness(board: list) -> int:
-    """0=dry, 1=semi, 2=wet, 3=very wet."""
+    # 0 = dry, 1 = semi, 2 = wet, 3 = very wet.
     if not board:
         return 0
     suits   = [card_suit(c) for c in board]
@@ -238,8 +199,7 @@ def board_high_card(board: list) -> int:
 def board_danger_score(connectedness: int, flush_pressure: int, paired: int) -> int:
     return connectedness + flush_pressure + (2 * paired)
 
-# ── POSITION HELPER ───────────────────────────────────────────────────────────
-
+# POSITION
 def seat_for_position(position: str, num_players: int) -> int:
     mapping = {
         "early":  1,
@@ -249,17 +209,9 @@ def seat_for_position(position: str, num_players: int) -> int:
     }
     return mapping.get(position, 1)
 
-# ── EV ────────────────────────────────────────────────────────────────────────
-
+# EV
 def calculate_ev(hand_strength: float, pot_odds: float,
                  to_call: float, pot_size: float, stack: float = None) -> dict:
-    """
-    Returns normalised EV for call, raise, fold, best, and optionally all-in.
-    ev_allin is None when stack is not provided.
-
-    FIX #2 / #8: `best_ev` and `ev_allin` keys are always present so both
-    DataGen and app.py can unpack the dict without KeyError.
-    """
     lose_prob = 1.0 - hand_strength
     norm      = max(pot_size, 1)
     ev_call   = hand_strength * (pot_size + to_call)   - lose_prob * to_call
@@ -275,17 +227,15 @@ def calculate_ev(hand_strength: float, pot_odds: float,
         "ev_allin": ev_allin,
     }
 
-# ── ACTION LABELING (used by DataGen only) ────────────────────────────────────
-
+# ACTION LABELING
 def decide_action(hand_strength: float, pot_odds: float, spr: float,
                   position: str, active_players: int, opponent_type: str,
                   ev_dict: dict, wetness: int, stack: float) -> str:
-    """Heuristic action label for dataset generation."""
+    # Heuristic action label for dataset generation.
     position_bonus   = {"button": 0.07, "late": 0.04, "middle": 0.0, "early": -0.05}
     pos_adj          = position_bonus.get(position, 0.0)
     multiway_penalty = 0.025 * max(0, active_players - 2)
     exploit_adj      = 0.03 if "tight" in opponent_type else -0.02
-
     adjusted         = hand_strength + pos_adj - multiway_penalty + exploit_adj
     edge             = adjusted - pot_odds
     raise_threshold  = 0.08 if spr <= 3 else 0.15
@@ -315,34 +265,15 @@ def decide_action(hand_strength: float, pot_odds: float, spr: float,
     else:
         return "fold"
 
-# ── MAIN FEATURE BUILDER ──────────────────────────────────────────────────────
-
+# MAIN
 def build_feature_vector(hole: list, board: list, stage: str, position: str,
                          stack: float, pot: float, to_call: float,
                          players: int, opp_type: str,
                          street_bet_pressure: float = None) -> dict:
-    """
-    Given raw inputs (treys card ints + context), returns the full feature dict
-    ready for the model. Used by both DataGen.py (training) and app.py (inference).
 
-    Parameters
-    ----------
-    hole                 : list of 2 treys card ints
-    board                : list of 0/3/4/5 treys card ints
-    stage                : "preflop" | "flop" | "turn" | "river"
-    position             : "early" | "middle" | "late" | "button"
-    stack, pot, to_call  : float (big blinds)
-    players              : int  (total players at table)
-    opp_type             : one of OPPONENT_TYPES
-    street_bet_pressure  : float 0-1; if None, derived from opp_aggression x 0.5
-    """
     r1, r2 = card_rank(hole[0]), card_rank(hole[1])
     high, low = max(r1, r2), min(r1, r2)
     gap    = high - low
-    # FIX #7: always use card_suit() (returns int) for both cards — never compare
-    # the raw TREYS_SUIT string dict values, which gives a string == string result
-    # that happens to work but is inconsistent with the card_suit() int path used
-    # everywhere else (flush_features, board_wetness, etc.).
     suited = int(card_suit(hole[0]) == card_suit(hole[1]))
 
     hs_base              = chen_score_normalized(high, low, suited)
@@ -408,6 +339,6 @@ def build_feature_vector(hole: list, board: list, stage: str, position: str,
         "opp_vpip":            OPP_VPIP[opp_type],
         "opp_aggression":      OPP_AGGRESSION[opp_type],
         "street_bet_pressure": street_bet_pressure,
-        # ev_allin stored separately (not a model feature, used by UI only)
+        # ev_allin
         "_ev_allin": ev_dict["ev_allin"],
     }
