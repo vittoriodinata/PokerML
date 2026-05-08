@@ -1,277 +1,344 @@
+from treys import Evaluator, Card
 
-import argparse
-import json
-import warnings
-from pathlib import Path
-import joblib
-import numpy as np
-import pandas as pd
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import (
-    classification_report,
-    confusion_matrix,
-    log_loss,
-    roc_auc_score,
-)
-from sklearn.model_selection import (
-    RandomizedSearchCV,
-    StratifiedKFold,
-    cross_val_score,
-    learning_curve,
-    train_test_split,
-)
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+evaluator = Evaluator()
 
-warnings.filterwarnings("ignore")
-
-# CLI
-parser = argparse.ArgumentParser()
-parser.add_argument("--data",      default="poker_dataset.csv")
-parser.add_argument("--out",       default="poker_model")
-parser.add_argument("--trees",     type=int,  default=300)
-parser.add_argument("--depth",     type=int,  default=None)
-parser.add_argument("--seed",      type=int,  default=42)
-parser.add_argument("--cv",        type=int,  default=0,
-                    help="Stratified k-fold CV folds (0 = skip CV)")
-parser.add_argument("--tune",      action="store_true",
-                    help="Run RandomizedSearchCV before final fit")
-parser.add_argument("--n-iter",    type=int,  default=30,
-                    help="Iterations for RandomizedSearchCV (--tune only)")
-parser.add_argument("--calibrate", action="store_true",
-                    help="Isotonic calibration of predicted probabilities")
-parser.add_argument("--curves",    action="store_true",
-                    help="Compute learning curves (adds ~1 min)")
-args = parser.parse_args()
-MODEL_DIR = Path(args.out)
-MODEL_DIR.mkdir(exist_ok=True)
-
-# LOAD
-df = pd.read_csv(args.data)
-print(f"Loaded {len(df):,} rows × {df.shape[1]} columns")
-print(f"\nAction distribution:\n{df['action'].value_counts().to_string()}\n")
-CAT_COLS = ["stage", "position"]
-label_encoders: dict = {}
-for col in CAT_COLS:
-    le = LabelEncoder()
-    df[col] = le.fit_transform(df[col])
-    label_encoders[col] = le
-action_le = LabelEncoder()
-df["action_id"] = action_le.fit_transform(df["action"])
-label_encoders["action"] = action_le
-CLASS_NAMES = list(action_le.classes_)
-FEATURE_COLS = [c for c in df.columns if c not in ("action", "action_id")]
-X = df[FEATURE_COLS].values.astype(np.float32)
-y = df["action_id"].values.astype(np.int64)
-print(f"Classes  : {CLASS_NAMES}")
-print(f"Features : {len(FEATURE_COLS)}")
-
-# SPLIT & SCALING
-X_tv, X_test, y_tv, y_test = train_test_split(
-    X, y, test_size=0.15, random_state=args.seed, stratify=y
-)
-X_train, X_val, y_train, y_val = train_test_split(
-    X_tv, y_tv,
-    test_size=0.15 / 0.85,
-    random_state=args.seed,
-    stratify=y_tv,
-)
-scaler  = StandardScaler()
-X_train = scaler.fit_transform(X_train)
-X_val   = scaler.transform(X_val)
-X_test  = scaler.transform(X_test)
-
-# TUNING
-base_params = dict(
-    n_estimators      = args.trees,
-    max_depth         = args.depth,
-    min_samples_split = 4,
-    min_samples_leaf  = 2,
-    max_features      = "sqrt",
-    class_weight      = "balanced",
-    n_jobs            = -1,
-    random_state      = args.seed,
-    oob_score         = True,
-)
-if args.tune:
-    param_dist = {
-        "n_estimators":      [100, 200, 300, 400, 500],
-        "max_depth":         [None, 10, 15, 20, 25, 30],
-        "min_samples_split": [2, 4, 6, 8],
-        "min_samples_leaf":  [1, 2, 4],
-        "max_features":      ["sqrt", "log2", 0.3, 0.5],
-        "class_weight":      ["balanced", "balanced_subsample"],
-    }
-
-    search_cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=args.seed)
-    search = RandomizedSearchCV(
-        RandomForestClassifier(n_jobs=-1, random_state=args.seed, oob_score=False),
-        param_distributions=param_dist,
-        n_iter=args.n_iter,
-        cv=search_cv,
-        scoring="accuracy",
-        n_jobs=-1,
-        random_state=args.seed,
-        verbose=1,
-        refit=True,
-    )
-    search.fit(X_train, y_train)
-
-    print(f"\nBest CV accuracy : {search.best_score_:.4f}")
-    print(f"Best params      : {search.best_params_}")
-    best_params = search.best_params_.copy()
-    best_params.update({"n_jobs": -1, "random_state": args.seed, "oob_score": True})
-    base_params.update(best_params)
-
-# CROSS VALIDATION
-cv_acc = cv_f1 = None
-
-if args.cv > 1:
-    print(f"\nRunning {args.cv}-fold stratified cross-validation ...")
-    cv_params = {k: v for k, v in base_params.items() if k != "oob_score"}
-    cv_rf     = RandomForestClassifier(**cv_params, oob_score=False)
-    cv_skf    = StratifiedKFold(n_splits=args.cv, shuffle=True, random_state=args.seed)
-    cv_acc = cross_val_score(cv_rf, X_train, y_train, cv=cv_skf, scoring="accuracy", n_jobs=-1)
-    cv_f1  = cross_val_score(cv_rf, X_train, y_train, cv=cv_skf, scoring="f1_macro",  n_jobs=-1)
-
-    print(f"  CV accuracy : {cv_acc.mean():.4f} ± {cv_acc.std():.4f}")
-    print(f"  CV F1 macro : {cv_f1.mean():.4f} ± {cv_f1.std():.4f}")
-
-# TRAIN
-
-print(f"\nTraining final Random Forest ...")
-rf = RandomForestClassifier(**base_params)
-rf.fit(X_train, y_train)
-print(f"Done.  OOB accuracy: {rf.oob_score_:.4f}")
-
-# LEARNING CURVES
-if args.curves:
-    print("\nComputing learning curves (this may take a minute) ...")
-    lc_params = {k: v for k, v in base_params.items() if k != "oob_score"}
-    lc_rf     = RandomForestClassifier(**lc_params, oob_score=False)
-    lc_skf    = StratifiedKFold(n_splits=5, shuffle=True, random_state=args.seed)
-
-    train_sizes, train_scores, val_scores = learning_curve(
-        lc_rf, X_train, y_train,
-        cv=lc_skf,
-        scoring="accuracy",
-        train_sizes=np.linspace(0.1, 1.0, 8),
-        n_jobs=-1,
-    )
-    print(f"  {'Train size':<12}  {'Train acc':<12}  {'Val acc'}")
-    for sz, tr, vl in zip(train_sizes, train_scores.mean(axis=1), val_scores.mean(axis=1)):
-        print(f"  {sz:<12d}  {tr:<12.4f}  {vl:.4f}")
-
-# PROBABILITY CALIBRATION
-if args.calibrate:
-    print("\nCalibrating probabilities (isotonic regression) ...")
-    calibrated_rf = CalibratedClassifierCV(rf, method="isotonic", cv=3)
-    calibrated_rf.fit(np.vstack([X_train, X_val]), np.concatenate([y_train, y_val]))
-    raw_proba = rf.predict_proba(X_test)
-    cal_proba = calibrated_rf.predict_proba(X_test)
-    ll_raw    = log_loss(y_test, raw_proba)
-    ll_cal    = log_loss(y_test, cal_proba)
-    print(f"  Log-loss before calibration : {ll_raw:.4f}")
-    print(f"  Log-loss after  calibration : {ll_cal:.4f}")
-    model_for_inference = calibrated_rf
-else:
-    model_for_inference = rf
-
-# EVALUATE
-val_preds  = model_for_inference.predict(X_val)
-val_acc    = (val_preds == y_val).mean()
-test_preds = model_for_inference.predict(X_test)
-test_proba = model_for_inference.predict_proba(X_test)
-test_acc   = (test_preds == y_test).mean()
-test_ll    = log_loss(y_test, test_proba)
-
-try:
-    test_auc = roc_auc_score(y_test, test_proba, multi_class="ovr", average="macro")
-except Exception:
-    test_auc = float("nan")
-
-print(f"\n{'='*55}")
-print(f"  Val  accuracy : {val_acc:.4f}")
-print(f"  Test accuracy : {test_acc:.4f}")
-print(f"  Test log-loss : {test_ll:.4f}")
-print(f"  Test AUC (OvR): {test_auc:.4f}")
-print(f"{'='*55}")
-print(classification_report(y_test, test_preds, target_names=CLASS_NAMES, digits=4))
-
-cm = confusion_matrix(y_test, test_preds)
-print("Confusion matrix (rows=actual, cols=predicted):")
-print(pd.DataFrame(cm, index=CLASS_NAMES, columns=CLASS_NAMES).to_string())
-
-# Save
-joblib.dump(model_for_inference, MODEL_DIR / "rf_model.pkl")
-joblib.dump(scaler,              MODEL_DIR / "scaler.pkl")
-joblib.dump(label_encoders,      MODEL_DIR / "label_encoders.pkl")
-
-cv_results = {}
-if cv_acc is not None and cv_f1 is not None:
-    cv_results = {
-        "cv_folds":    args.cv,
-        "cv_acc_mean": round(float(cv_acc.mean()), 6),
-        "cv_acc_std":  round(float(cv_acc.std()),  6),
-        "cv_f1_mean":  round(float(cv_f1.mean()),  6),
-        "cv_f1_std":   round(float(cv_f1.std()),   6),
-    }
-
-feat_imp = pd.Series(rf.feature_importances_, index=FEATURE_COLS).sort_values(ascending=False)
-
-meta = {
-    "feature_cols":  FEATURE_COLS,
-    "cat_cols":      CAT_COLS,
-    "class_names":   CLASS_NAMES,
-    "n_estimators":  base_params["n_estimators"],
-    "max_depth":     base_params["max_depth"],
-    "calibrated":    args.calibrate,
-    "oob_score":     round(rf.oob_score_, 6),
-    "val_acc":       round(float(val_acc),   6),
-    "test_acc":      round(float(test_acc),  6),
-    "test_log_loss": round(float(test_ll),   6),
-    "test_auc_ovr":  round(float(test_auc),  6) if not np.isnan(test_auc) else None,
-    "top_features":  feat_imp.round(6).to_dict(),
+# CONSTANTS
+POSITIONS      = ["early", "middle", "late", "button"]
+OPPONENT_TYPES = ["tight_passive", "tight_aggressive", "loose_passive", "loose_aggressive"]
+OPP_VPIP = {
+    "tight_passive":    0.15,
+    "tight_aggressive": 0.20,
+    "loose_passive":    0.45,
+    "loose_aggressive": 0.55,
+}
+OPP_AGGRESSION = {
+    "tight_passive":    0.20,
+    "tight_aggressive": 0.75,
+    "loose_passive":    0.15,
+    "loose_aggressive": 0.80,
 }
 
-with open(MODEL_DIR / "meta.json", "w") as f:
-    json.dump(meta, f, indent=2)
+# CARD UTILITIES
+def card_rank(c: int) -> int:
+    """Treys card int → rank as 2–14."""
+    return Card.get_rank_int(c) + 2
 
-print(f"\nSaved to {MODEL_DIR}/")
-print(f"  rf_model.pkl         {'Calibrated RF' if args.calibrate else 'Random Forest'}")
-print(f"  scaler.pkl           StandardScaler")
-print(f"  label_encoders.pkl   stage / position / action")
-print(f"  meta.json            accuracy + feature importance")
+def card_suit(c: int) -> int:
+    """Treys card int → suit int (1, 2, 4, 8)."""
+    return Card.get_suit_int(c)
 
-# export
-top_feats = [
-    "hand_strength", "chen_score", "equity_edge", "pot_odds",
-    "spr", "ev_raise", "ev_call", "board_wetness",
-    "board_danger_score", "flush_draw", "straight_draw", "stack_size",
-]
-corr_matrix = df[top_feats].corr(method="pearson")
-corr_matrix.to_csv(MODEL_DIR / "corr_matrix.csv")
+# CHEN SCORE
+def chen_score_normalized(r1: int, r2: int, suited: int) -> float:
+    """
+    Chen formula normalised to [0, 1].
+    r1, r2 are raw ranks (2–14); suited is 0/1.
+    """
+    high, low = max(r1, r2), min(r1, r2)
+    score_map = {
+        14: 10, 13: 8, 12: 7, 11: 6, 10: 5,
+        9: 4.5, 8: 4, 7: 3.5, 6: 3, 5: 2.5,
+        4: 2, 3: 1.5, 2: 1,
+    }
+    score = score_map.get(high, 1.0)
+    if r1 == r2:
+        score = max(score * 2, 5)
+    if suited:
+        score += 2
+    gap = high - low if r1 != r2 else 0
+    score -= {0: 0, 1: 0, 2: 1, 3: 2, 4: 4}.get(min(gap, 4), 5)
+    if 0 < gap <= 2:
+        score += 1
+    return round(max(0.0, min(1.0, score / 20.0)), 4)
 
-hs_export = df[["hand_strength", "action"]].groupby("action").apply(
-    lambda x: x.sample(min(len(x), 50_000), random_state=42)
-).reset_index(drop=True)
-hs_export.to_csv(MODEL_DIR / "hs_by_action.csv", index=False)
+# MULTIWAY EQUITY
+def multiway_equity_factor(num_active: int) -> float:
+    
+    #Unapplied to near-nut hands (hand_strength >= 0.95).
+    return 0.85 ** max(0, num_active - 2)
 
-# Inference
-def load_model(model_dir: Path = MODEL_DIR):
-    _meta = json.load(open(model_dir / "meta.json"))
-    _les  = joblib.load(model_dir / "label_encoders.pkl")
-    _sc   = joblib.load(model_dir / "scaler.pkl")
-    _rf   = joblib.load(model_dir / "rf_model.pkl")
+# HAND STRENGTH
+def get_hand_strength(board: list, hole: list, active_players: int) -> tuple:
+    # Preflop  → Chen score x multiway factor.
+    # Postflop → treys evaluator; multiway factor skipped for near-nut hands (>= 0.95)
+    if not board:
+        r1, r2  = card_rank(hole[0]), card_rank(hole[1])
+        suited  = int(card_suit(hole[0]) == card_suit(hole[1]))
+        base    = chen_score_normalized(max(r1, r2), min(r1, r2), suited)
+        return 9, round(base * multiway_equity_factor(active_players), 4)
+    score         = evaluator.evaluate(board, hole)
+    hand_class    = evaluator.get_rank_class(score)
+    hand_strength = 1.0 - (score / 7462.0)
+    if hand_strength >= 0.95:
+        adjusted = hand_strength
+    else:
+        adjusted = hand_strength * multiway_equity_factor(active_players)
+    return hand_class, round(adjusted, 4)
 
-    def predict_action(hand: dict) -> tuple[str, dict]:
-        row = pd.DataFrame([hand])
-        for col in _meta["cat_cols"]:
-            row[col] = _les[col].transform(row[col])
-        X_in   = row[_meta["feature_cols"]].values.astype(float)
-        X_sc   = _sc.transform(X_in)
-        proba  = _rf.predict_proba(X_sc)[0]
-        action = _les["action"].inverse_transform([int(proba.argmax())])[0]
-        return action, dict(zip(_meta["class_names"], proba.round(4).tolist()))
+# HAND ABSTRACTION
+def hand_abstraction_features(board: list, hole: list) -> dict:
+    # Treys hand_class codes:
+    #   1=Straight Flush, 2=Quads, 3=Full House, 4=Flush, 5=Straight,
+    #   6=Set, 7=Two Pair, 8=One Pair, 9=High Card
+    if not board:
+        return {
+            "is_overpair": 0, "is_top_pair": 0, "is_middle_pair": 0,
+            "is_set": 0, "is_two_pair": 0, "is_straight": 0,
+            "is_flush": 0, "hand_abstraction": 0,
+        }
+    board_ranks = sorted([card_rank(c) for c in board])
+    hole_ranks  = [card_rank(c) for c in hole]
+    score       = evaluator.evaluate(board, hole)
+    hand_class  = evaluator.get_rank_class(score)
+    is_pair        = int(hand_class == 8)
+    max_board      = max(board_ranks)
+    mid_board      = sorted(board_ranks)[len(board_ranks) // 2]
+    is_top_pair    = int(is_pair and max(hole_ranks) == max_board)
+    is_middle_pair = int(is_pair and not is_top_pair and any(r == mid_board for r in hole_ranks))
+    is_overpair    = int(hand_class == 8 and hole_ranks[0] == hole_ranks[1]
+                         and min(hole_ranks) > max_board)
+    is_set      = int(hand_class == 6)
+    is_two_pair = int(hand_class == 7)
+    is_straight = int(hand_class == 5)
+    is_flush    = int(hand_class == 4)
+    if hand_class <= 3:# SF, Quads, Full House
+        tier = 4
+    elif hand_class <= 7:# Flush, Straight, Set, Two Pair
+        tier = 3
+    elif is_overpair or is_top_pair:
+        tier = 2
+    elif is_pair:
+        tier = 1
+    else:
+        tier = 0
+    return {
+        "is_overpair": is_overpair, "is_top_pair": is_top_pair,
+        "is_middle_pair": is_middle_pair, "is_set": is_set,
+        "is_two_pair": is_two_pair, "is_straight": is_straight,
+        "is_flush": is_flush, "hand_abstraction": tier,
+    }
+# FLUSH FEATURES
+def flush_features(hole: list, board: list) -> dict:
+    if not board:
+        return {"max_suit": 0, "flush_draw": 0, "flush_made": 0, "board_flush_pressure": 0}
+    hole_suits  = [card_suit(c) for c in hole]
+    board_suits = [card_suit(c) for c in board]
+    all_suits   = hole_suits + board_suits
+    player_max  = max(all_suits.count(s) for s in set(all_suits))
+    board_max   = max(board_suits.count(s) for s in set(board_suits))
+    return {
+        "max_suit":             player_max,
+        "flush_draw":           int(player_max == 4),
+        "flush_made":           int(player_max >= 5),
+        "board_flush_pressure": board_max,
+    }
 
-    return predict_action
+# ─STRAIGHT FEATURES
+def straight_features(hole: list, board: list) -> dict:
+    all_cards = hole + board
+    ranks     = sorted(set(card_rank(c) for c in all_cards))
+    if 14 in ranks:           # Ace can play low (wheel)
+        ranks = [1] + ranks
+    open_ended = gutshot = 0
+    for low in range(1, 12):
+        window = [r for r in ranks if low <= r <= low + 4]
+        if len(window) >= 4:
+            span = window[-1] - window[0]
+            if span == 3:
+                open_ended = 1 # OESD
+            elif span == 4 and len(window) == 4:
+                gutshot = 1 # GSD
+    fd = flush_features(hole, board)["flush_draw"]
+    if open_ended and fd:
+        draw_type = 3
+    elif open_ended:
+        draw_type = 2
+    elif gutshot:
+        draw_type = 1
+    else:
+        draw_type = 0
+    return {
+        "straight_draw": int(open_ended or gutshot),
+        "open_ended":    open_ended,
+        "gutshot":       gutshot,
+        "draw_type":     draw_type,
+    }
+
+# BOARD TEXTURE
+def board_wetness(board: list) -> int:
+    # 0 = dry, 1 = semi, 2 = wet, 3 = very wet.
+    if not board:
+        return 0
+    suits   = [card_suit(c) for c in board]
+    board_r = sorted([card_rank(c) for c in board])
+    flush_threat    = max(suits.count(s) for s in set(suits)) >= 3
+    gaps            = [board_r[i + 1] - board_r[i] for i in range(len(board_r) - 1)]
+    straight_threat = sum(1 for g in gaps if g <= 2) >= (len(board_r) - 1)
+    is_paired       = len(board_r) != len(set(board_r))
+    return min(3, int(flush_threat) + int(straight_threat) + int(is_paired))
+
+def board_connectedness(board: list) -> int:
+    if len(board) < 2:
+        return 0
+    ranks = sorted(set(card_rank(c) for c in board))
+    max_run = current_run = 1
+    for i in range(len(ranks) - 1):
+        if ranks[i + 1] - ranks[i] == 1:
+            current_run += 1
+            max_run = max(max_run, current_run)
+        else:
+            current_run = 1
+    return max_run
+
+def board_paired(board: list) -> int:
+    ranks = [card_rank(c) for c in board]
+    return int(len(ranks) != len(set(ranks)))
+
+def board_high_card(board: list) -> int:
+    return max(card_rank(c) for c in board) if board else 0
+
+def board_danger_score(connectedness: int, flush_pressure: int, paired: int) -> int:
+    return connectedness + flush_pressure + (2 * paired)
+
+# POSITION
+def seat_for_position(position: str, num_players: int) -> int:
+    mapping = {
+        "early":  1,
+        "middle": max(1, num_players // 3),
+        "late":   max(1, (2 * num_players) // 3),
+        "button": num_players,
+    }
+    return mapping.get(position, 1)
+
+# EV
+def calculate_ev(hand_strength: float, pot_odds: float,
+                 to_call: float, pot_size: float, stack: float = None) -> dict:
+    lose_prob = 1.0 - hand_strength
+    norm      = max(pot_size, 1)
+    ev_call   = hand_strength * (pot_size + to_call)   - lose_prob * to_call
+    ev_raise  = hand_strength * (pot_size + 2*to_call) - lose_prob * 2*to_call
+    ev_allin  = None
+    if stack is not None:
+        ev_allin = round((hand_strength * (pot_size + stack) - lose_prob * stack) / norm, 4)
+    return {
+        "ev_call":  round(ev_call  / norm, 4),
+        "ev_raise": round(ev_raise / norm, 4),
+        "ev_fold":  0.0,
+        "best_ev":  round(max(ev_call, ev_raise, 0.0) / norm, 4),   # FIX #8
+        "ev_allin": ev_allin,
+    }
+
+# ACTION LABELING
+def decide_action(hand_strength: float, pot_odds: float, spr: float,
+                  position: str, active_players: int, opponent_type: str,
+                  ev_dict: dict, wetness: int, stack: float) -> str:
+    # Heuristic action label for dataset generation.
+    position_bonus   = {"button": 0.07, "late": 0.04, "middle": 0.0, "early": -0.05}
+    pos_adj          = position_bonus.get(position, 0.0)
+    multiway_penalty = 0.025 * max(0, active_players - 2)
+    exploit_adj      = 0.03 if "tight" in opponent_type else -0.02
+    adjusted         = hand_strength + pos_adj - multiway_penalty + exploit_adj
+    edge             = adjusted - pot_odds
+    raise_threshold  = 0.08 if spr <= 3 else 0.15
+
+    if wetness >= 2 and 0.40 < hand_strength < 0.65:
+        raise_threshold += 0.05
+
+    # All-in conditions
+    if stack < 20 and hand_strength > 0.45:
+        return "all-in"
+    if stack < 40 and hand_strength > 0.70:
+        return "all-in"
+    if spr < 2.0 and hand_strength > 0.60:
+        return "all-in"
+    if hand_strength > 0.90:
+        return "all-in"
+    if ev_dict["ev_raise"] > ev_dict["ev_call"] and spr < 4 and hand_strength > 0.75:
+        return "all-in"
+
+    # Standard actions
+    if edge < -0.08:
+        return "fold"
+    elif ev_dict["ev_raise"] > ev_dict["ev_call"] and edge >= raise_threshold:
+        return "raise"
+    elif edge >= 0 or (edge >= -0.05 and ev_dict["ev_call"] > 0):
+        return "call"
+    else:
+        return "fold"
+
+# MAIN
+def build_feature_vector(hole: list, board: list, stage: str, position: str,
+                         stack: float, pot: float, to_call: float,
+                         players: int, opp_type: str,
+                         street_bet_pressure: float = None) -> dict:
+
+    r1, r2 = card_rank(hole[0]), card_rank(hole[1])
+    high, low = max(r1, r2), min(r1, r2)
+    gap    = high - low
+    suited = int(card_suit(hole[0]) == card_suit(hole[1]))
+
+    hs_base              = chen_score_normalized(high, low, suited)
+    hand_class, hand_str = get_hand_strength(board, hole, players)
+
+    pot_odds       = to_call / max(pot + to_call, 1)
+    spr            = stack   / max(pot + to_call, 1)
+    seat_index     = seat_for_position(position, players)
+    position_ratio = round(seat_index / max(players, 1), 4)
+    effective_spr  = round(spr / max(players - 1, 1), 4)
+    bet_ratio      = round(to_call / max(pot, 1), 4)
+    pot_commitment = round(to_call / max(pot + to_call, 1), 4)
+    equity_edge    = round(hand_str - pot_odds, 4)
+
+    ev_dict   = calculate_ev(hand_str, pot_odds, to_call, pot, stack)
+    abs_feats = hand_abstraction_features(board, hole)
+    f_feats   = flush_features(hole, board)
+    s_feats   = straight_features(hole, board)
+
+    conn      = board_connectedness(board)
+    paired    = board_paired(board)
+    high_card = board_high_card(board)
+    danger    = board_danger_score(conn, f_feats["board_flush_pressure"], paired)
+    wetness   = board_wetness(board)
+
+    if street_bet_pressure is None:
+        street_bet_pressure = round(OPP_AGGRESSION[opp_type] * 0.5, 4)
+
+    return {
+        # Hole cards
+        "rank1": high, "rank2": low, "suited": suited,
+        "pair": int(r1 == r2), "gap": gap, "chen_score": hs_base,
+        # Context
+        "stage": stage, "position": position,
+        "position_ratio": position_ratio, "seat_index": seat_index,
+        "num_players": players, "active_players": players,
+        # Stack / pot
+        "stack_size": stack, "pot_size": pot, "to_call": to_call,
+        "pot_odds": round(pot_odds, 4), "spr": round(spr, 4),
+        "effective_spr": effective_spr, "bet_ratio": bet_ratio,
+        "pot_commitment": pot_commitment,
+        # EV
+        "ev_call":  ev_dict["ev_call"],
+        "ev_raise": ev_dict["ev_raise"],
+        "ev_fold":  0.0,
+        "best_ev":  ev_dict["best_ev"],
+        # Equity
+        "equity_edge": equity_edge,
+        # Hand strength
+        "hand_class": hand_class, "hand_strength": hand_str,
+        # Abstraction
+        **abs_feats,
+        # Flush
+        **f_feats,
+        # Board texture
+        "board_connectedness": conn, "board_paired": paired,
+        "board_high_card": high_card, "board_danger_score": danger,
+        "board_wetness": wetness,
+        # Straight / draws
+        **s_feats,
+        # Opponent
+        "opp_type_encoded":    OPPONENT_TYPES.index(opp_type),
+        "opp_vpip":            OPP_VPIP[opp_type],
+        "opp_aggression":      OPP_AGGRESSION[opp_type],
+        "street_bet_pressure": street_bet_pressure,
+        # ev_allin
+        "_ev_allin": ev_dict["ev_allin"],
+    }
