@@ -1,3 +1,4 @@
+
 import argparse
 import json
 import warnings
@@ -24,8 +25,7 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 warnings.filterwarnings("ignore")
 
-# ─── 1. CLI ──────────────────────────────────────────────────────────────────
-
+# CLI
 parser = argparse.ArgumentParser()
 parser.add_argument("--data",      default="poker_dataset.csv")
 parser.add_argument("--out",       default="poker_model")
@@ -43,38 +43,30 @@ parser.add_argument("--calibrate", action="store_true",
 parser.add_argument("--curves",    action="store_true",
                     help="Compute learning curves (adds ~1 min)")
 args = parser.parse_args()
-
 MODEL_DIR = Path(args.out)
 MODEL_DIR.mkdir(exist_ok=True)
 
-# ─── 2. LOAD & ENCODE ────────────────────────────────────────────────────────
-
+# LOAD
 df = pd.read_csv(args.data)
 print(f"Loaded {len(df):,} rows × {df.shape[1]} columns")
 print(f"\nAction distribution:\n{df['action'].value_counts().to_string()}\n")
-
 CAT_COLS = ["stage", "position"]
 label_encoders: dict = {}
-
 for col in CAT_COLS:
     le = LabelEncoder()
     df[col] = le.fit_transform(df[col])
     label_encoders[col] = le
-
 action_le = LabelEncoder()
 df["action_id"] = action_le.fit_transform(df["action"])
 label_encoders["action"] = action_le
 CLASS_NAMES = list(action_le.classes_)
-
 FEATURE_COLS = [c for c in df.columns if c not in ("action", "action_id")]
 X = df[FEATURE_COLS].values.astype(np.float32)
 y = df["action_id"].values.astype(np.int64)
-
 print(f"Classes  : {CLASS_NAMES}")
 print(f"Features : {len(FEATURE_COLS)}")
 
-# ─── 3. SPLIT & SCALING ──────────────────────────────────────────────────────
-
+# SPLIT & SCALING
 X_tv, X_test, y_tv, y_test = train_test_split(
     X, y, test_size=0.15, random_state=args.seed, stratify=y
 )
@@ -89,8 +81,7 @@ X_train = scaler.fit_transform(X_train)
 X_val   = scaler.transform(X_val)
 X_test  = scaler.transform(X_test)
 
-# ─── 4. HYPERPARAMETER TUNING (optional) ─────────────────────────────────────
-
+# TUNING
 base_params = dict(
     n_estimators      = args.trees,
     max_depth         = args.depth,
@@ -102,10 +93,7 @@ base_params = dict(
     random_state      = args.seed,
     oob_score         = True,
 )
-
 if args.tune:
-    print(f"\nHyperparameter search ({args.n_iter} iterations) ...")
-
     param_dist = {
         "n_estimators":      [100, 200, 300, 400, 500],
         "max_depth":         [None, 10, 15, 20, 25, 30],
@@ -117,8 +105,6 @@ if args.tune:
 
     search_cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=args.seed)
     search = RandomizedSearchCV(
-        # FIX: oob_score=False because RandomizedSearchCV uses internal CV splits,
-        # making OOB scoring invalid (and it raises an error with some sklearn versions).
         RandomForestClassifier(n_jobs=-1, random_state=args.seed, oob_score=False),
         param_distributions=param_dist,
         n_iter=args.n_iter,
@@ -133,43 +119,32 @@ if args.tune:
 
     print(f"\nBest CV accuracy : {search.best_score_:.4f}")
     print(f"Best params      : {search.best_params_}")
-
-    # Merge best params into base_params (overrides CLI defaults).
-    # Re-add oob_score=True for the final standalone fit.
     best_params = search.best_params_.copy()
     best_params.update({"n_jobs": -1, "random_state": args.seed, "oob_score": True})
     base_params.update(best_params)
 
-# ─── 5. CROSS-VALIDATION (optional) ──────────────────────────────────────────
-# FIX: cv_acc / cv_f1 were referenced later but never actually computed.
-# Now we run cross_val_score here when --cv > 1 and store the arrays.
-
-cv_acc = cv_f1 = None   # sentinels; populated only when --cv > 1
+# CROSS VALIDATION
+cv_acc = cv_f1 = None
 
 if args.cv > 1:
     print(f"\nRunning {args.cv}-fold stratified cross-validation ...")
-    # Use a fresh (unfitted) RF with the same params but oob_score off,
-    # because OOB scoring is incompatible with cross_val_score's sub-sampling.
     cv_params = {k: v for k, v in base_params.items() if k != "oob_score"}
     cv_rf     = RandomForestClassifier(**cv_params, oob_score=False)
     cv_skf    = StratifiedKFold(n_splits=args.cv, shuffle=True, random_state=args.seed)
-
     cv_acc = cross_val_score(cv_rf, X_train, y_train, cv=cv_skf, scoring="accuracy", n_jobs=-1)
     cv_f1  = cross_val_score(cv_rf, X_train, y_train, cv=cv_skf, scoring="f1_macro",  n_jobs=-1)
 
     print(f"  CV accuracy : {cv_acc.mean():.4f} ± {cv_acc.std():.4f}")
     print(f"  CV F1 macro : {cv_f1.mean():.4f} ± {cv_f1.std():.4f}")
 
-# ─── 6. FINAL TRAINING ───────────────────────────────────────────────────────
+# TRAIN
 
 print(f"\nTraining final Random Forest ...")
 rf = RandomForestClassifier(**base_params)
 rf.fit(X_train, y_train)
 print(f"Done.  OOB accuracy: {rf.oob_score_:.4f}")
 
-# ─── 7. LEARNING CURVES (optional) ───────────────────────────────────────────
-# FIX: --curves flag was parsed but the learning_curve call was never written.
-
+# LEARNING CURVES
 if args.curves:
     print("\nComputing learning curves (this may take a minute) ...")
     lc_params = {k: v for k, v in base_params.items() if k != "oob_score"}
@@ -187,29 +162,24 @@ if args.curves:
     for sz, tr, vl in zip(train_sizes, train_scores.mean(axis=1), val_scores.mean(axis=1)):
         print(f"  {sz:<12d}  {tr:<12.4f}  {vl:.4f}")
 
-# ─── 8. PROBABILITY CALIBRATION (optional) ───────────────────────────────────
-
+# PROBABILITY CALIBRATION
 if args.calibrate:
     print("\nCalibrating probabilities (isotonic regression) ...")
     calibrated_rf = CalibratedClassifierCV(rf, method="isotonic", cv=3)
     calibrated_rf.fit(np.vstack([X_train, X_val]), np.concatenate([y_train, y_val]))
-
     raw_proba = rf.predict_proba(X_test)
     cal_proba = calibrated_rf.predict_proba(X_test)
     ll_raw    = log_loss(y_test, raw_proba)
     ll_cal    = log_loss(y_test, cal_proba)
     print(f"  Log-loss before calibration : {ll_raw:.4f}")
     print(f"  Log-loss after  calibration : {ll_cal:.4f}")
-
     model_for_inference = calibrated_rf
 else:
     model_for_inference = rf
 
-# ─── 9. EVALUATE ─────────────────────────────────────────────────────────────
-
+# EVALUATE
 val_preds  = model_for_inference.predict(X_val)
 val_acc    = (val_preds == y_val).mean()
-
 test_preds = model_for_inference.predict(X_test)
 test_proba = model_for_inference.predict_proba(X_test)
 test_acc   = (test_preds == y_test).mean()
@@ -232,24 +202,11 @@ cm = confusion_matrix(y_test, test_preds)
 print("Confusion matrix (rows=actual, cols=predicted):")
 print(pd.DataFrame(cm, index=CLASS_NAMES, columns=CLASS_NAMES).to_string())
 
-# ─── 10. FEATURE IMPORTANCE ──────────────────────────────────────────────────
-
-# Always pull importances from the raw RF, even when wrapped in CalibratedClassifierCV.
-base_rf  = rf
-feat_imp = pd.Series(base_rf.feature_importances_, index=FEATURE_COLS).nlargest(20)
-
-print("\nTop 20 features (mean decrease in impurity):")
-for feat, score in feat_imp.items():
-    bar = "█" * int(score * 500)
-    print(f"  {feat:<34}  {score:.4f}  {bar}")
-
-# ─── 11. SAVE ─────────────────────────────────────────────────────────────────
-
+# Save
 joblib.dump(model_for_inference, MODEL_DIR / "rf_model.pkl")
 joblib.dump(scaler,              MODEL_DIR / "scaler.pkl")
 joblib.dump(label_encoders,      MODEL_DIR / "label_encoders.pkl")
 
-# FIX: cv_results now only populated when cv_acc / cv_f1 were actually computed.
 cv_results = {}
 if cv_acc is not None and cv_f1 is not None:
     cv_results = {
@@ -273,8 +230,8 @@ meta = {
     "test_log_loss": round(float(test_ll),   6),
     "test_auc_ovr":  round(float(test_auc),  6) if not np.isnan(test_auc) else None,
     "top_features":  feat_imp.round(6).to_dict(),
-    **cv_results,
 }
+
 with open(MODEL_DIR / "meta.json", "w") as f:
     json.dump(meta, f, indent=2)
 
@@ -284,16 +241,8 @@ print(f"  scaler.pkl           StandardScaler")
 print(f"  label_encoders.pkl   stage / position / action")
 print(f"  meta.json            accuracy + feature importance")
 
-# ─── 12. INFERENCE HELPER ─────────────────────────────────────────────────────
-
+# Inference
 def load_model(model_dir: Path = MODEL_DIR):
-    """
-    Returns a predict_action(hand_dict) callable ready for live use.
-
-    Returns
-    -------
-    tuple[str, dict]  — predicted action label + {action: probability} map
-    """
     _meta = json.load(open(model_dir / "meta.json"))
     _les  = joblib.load(model_dir / "label_encoders.pkl")
     _sc   = joblib.load(model_dir / "scaler.pkl")
