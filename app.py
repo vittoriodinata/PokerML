@@ -78,15 +78,7 @@ else:
 # Model download
 FOLDER_URL = "https://drive.google.com/drive/folders/1W6gHiQ2SnTJT7l77JgiBW5we-v2v-LOz"
 
-_required = [
-    "poker_model/rf_model.pkl",
-    "poker_model/scaler.pkl",
-    "poker_model/label_encoders.pkl",
-    "poker_model/meta.json",
-    "poker_model/corr_matrix.csv",
-    "poker_model/hs_by_action.csv",
-]
-if not all(os.path.exists(f) for f in _required):
+if not os.path.exists("poker_model"):
     with st.spinner("Downloading model files…"):
         gdown.download_folder(FOLDER_URL, quiet=False, use_cookies=False)
 
@@ -116,10 +108,10 @@ meta, les, sc, rf = load_model()
 # constants for data generation
 RANK_LABELS = {
     2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9",
-    10: "T", 11: "J", 12: "Q", 13: "K", 14: "A",
+    10: "10", 11: "J", 12: "Q", 13: "K", 14: "A",
 }
 TREYS_RANK = {2:"2",3:"3",4:"4",5:"5",6:"6",7:"7",8:"8",9:"9",
-              10:"T",11:"J",12:"Q",13:"K",14:"A"}
+              10:"10",11:"J",12:"Q",13:"K",14:"A"}
 TREYS_SUIT  = {"♠": "s", "♥": "h", "♦": "d", "♣": "c"}
 SUIT_OPTIONS = ["♠", "♥", "♦", "♣"]
 OPP_LABELS  = {
@@ -371,21 +363,21 @@ def page_statistics():
     st.subheader("① Model Performance Metrics")
 
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Overall Accuracy",  "99.6%")
-    m2.metric("Macro F1-Score",    "0.9912")
-    m3.metric("Weighted F1-Score", "0.9962")
-    m4.metric("ROC-AUC (macro)",   "1.000")
-    m5.metric("Log-Loss",          "0.0226")
+    m1.metric("Overall Accuracy",  "87.2%")
+    m2.metric("Macro F1-Score",    "0.7226")
+    m3.metric("Weighted F1-Score", "0.8615")
+    m4.metric("ROC-AUC (macro)",   "0.8085")
+    m5.metric("Log-Loss",          "0.5249")
 
     st.markdown("&nbsp;")
 
     # Per-class metrics table
     metrics_df = pd.DataFrame({
-    "Action":    ["All-In", "Call",   "Fold",   "Raise"],
-    "Precision": [0.9985,   0.9925,   0.9983,   0.9661],
-    "Recall":    [0.9985,   0.9912,   0.9981,   0.9866],
-    "F1-Score":  [0.9985,   0.9918,   0.9982,   0.9762],
-    "Support":   [4529,     34135,    107841,   3495],
+    "Action":    ["All-In", "Call",  "Fold",  "Raise"],
+    "Precision": [0.8939,   0.8263,  0.8863,  0.8574],
+    "Recall":    [0.4614,   0.8425,  0.9597,  0.3792],
+    "F1-Score":  [0.6086,   0.8343,  0.9215,  0.5258],
+    "Support":   [8947,     34510,   98473,   8070],
 })
     st.dataframe(
         metrics_df.style
@@ -401,7 +393,7 @@ def page_statistics():
     # ── ② Action Distribution ─────────────────────────────────────────────────
     st.subheader("② Action Distribution in Training Data")
 
-    action_counts = {"Fold": 718943, "Call": 227565, "Raise": 30191, "All-In": 23301}
+    action_counts = {"Fold": 656484, "Call": 230070, "All-In": 59646, "Raise": 53800}
     fig1, ax1 = plt.subplots(figsize=(8, 4))
     bars = ax1.bar(
         action_counts.keys(), action_counts.values(),
@@ -429,7 +421,7 @@ def page_statistics():
     rng = np.random.RandomState(42)
     fig2, ax2 = plt.subplots(figsize=(8, 5))
 
-    auc_vals = {"Call": 1.000, "Raise": 1.000, "Fold": 1.000, "All-In": 1.000}
+    auc_vals = {"Call": 0.900, "Raise": 0.810, "Fold": 0.870, "All-In": 0.855}
     for (label, auc), color in zip(auc_vals.items(), COLORS):
         fpr = np.linspace(0, 1, 200)
         tpr = 1 - np.exp(-auc * 6 * fpr) + rng.normal(0, 0.008, 200)
@@ -689,4 +681,4 @@ elif selected == "About Us":
 elif selected == "Statistics":
     page_statistics()
 elif selected == "User Manual":
-    page_manual()
+    page_manual()   
