@@ -454,6 +454,9 @@ def page_statistics():
         return pd.read_csv("poker_model/hs_by_action.csv")
 
     hs_df = load_hs()
+    st.write(hs_df.columns.tolist())  # temporary debug line
+    st.write(hs_df.head())
+    st.stop()
 
     fig3, ax3 = plt.subplots(figsize=(9, 5))
     color_map = {"fold": "#ed8936", "call": "#4299e1", "raise": "#48bb78", "all-in": "#e53e3e"}
