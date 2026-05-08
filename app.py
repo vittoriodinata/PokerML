@@ -78,7 +78,15 @@ else:
 # Model download
 FOLDER_URL = "https://drive.google.com/drive/folders/1W6gHiQ2SnTJT7l77JgiBW5we-v2v-LOz"
 
-if not os.path.exists("poker_model"):
+_required = [
+    "poker_model/rf_model.pkl",
+    "poker_model/scaler.pkl",
+    "poker_model/label_encoders.pkl",
+    "poker_model/meta.json",
+    "poker_model/corr_matrix.csv",
+    "poker_model/hs_by_action.csv",
+]
+if not all(os.path.exists(f) for f in _required):
     with st.spinner("Downloading model files…"):
         gdown.download_folder(FOLDER_URL, quiet=False, use_cookies=False)
 
