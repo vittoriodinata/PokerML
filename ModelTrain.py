@@ -1,4 +1,3 @@
-
 import argparse
 import json
 import warnings
@@ -217,6 +216,8 @@ if cv_acc is not None and cv_f1 is not None:
         "cv_f1_std":   round(float(cv_f1.std()),   6),
     }
 
+feat_imp = pd.Series(rf.feature_importances_, index=FEATURE_COLS).sort_values(ascending=False)
+
 meta = {
     "feature_cols":  FEATURE_COLS,
     "cat_cols":      CAT_COLS,
@@ -240,6 +241,20 @@ print(f"  rf_model.pkl         {'Calibrated RF' if args.calibrate else 'Random F
 print(f"  scaler.pkl           StandardScaler")
 print(f"  label_encoders.pkl   stage / position / action")
 print(f"  meta.json            accuracy + feature importance")
+
+# export
+top_feats = [
+    "hand_strength", "chen_score", "equity_edge", "pot_odds",
+    "spr", "ev_raise", "ev_call", "board_wetness",
+    "board_danger_score", "flush_draw", "straight_draw", "stack_size",
+]
+corr_matrix = df[top_feats].corr(method="pearson")
+corr_matrix.to_csv(MODEL_DIR / "corr_matrix.csv")
+
+hs_export = df[["hand_strength", "action"]].groupby("action").apply(
+    lambda x: x.sample(min(len(x), 50_000), random_state=42)
+).reset_index(drop=True)
+hs_export.to_csv(MODEL_DIR / "hs_by_action.csv", index=False)
 
 # Inference
 def load_model(model_dir: Path = MODEL_DIR):
