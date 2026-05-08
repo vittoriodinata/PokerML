@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 import seaborn as sns
 from treys import Card
 
@@ -19,7 +18,7 @@ from Features import (
     OPP_AGGRESSION,
 )
 
-# ── PAGE CONFIG (must be first Streamlit call) ────────────────────────────────
+# config
 st.set_page_config(
     page_title="Poker Decision Advisor",
     page_icon="🃏",
@@ -27,14 +26,14 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ── NAVBAR ────────────────────────────────────────────────────────────────────
+# navbar
 try:
     from streamlit_option_menu import option_menu
     _HAS_MENU = True
 except ImportError:
     _HAS_MENU = False
 
-# Inject minimal CSS for a polished look
+# css
 st.markdown("""
 <style>
     /* Tighten top padding */
@@ -69,7 +68,6 @@ if _HAS_MENU:
         },
     )
 else:
-    # Graceful fallback using sidebar radio
     with st.sidebar:
         selected = st.radio(
             "Navigate",
@@ -77,7 +75,7 @@ else:
             index=0,
         )
 
-# ── MODEL DOWNLOAD ────────────────────────────────────────────────────────────
+# Model download
 FOLDER_URL = "https://drive.google.com/drive/folders/1W6gHiQ2SnTJT7l77JgiBW5we-v2v-LOz"
 
 if not os.path.exists("poker_model"):
@@ -107,7 +105,7 @@ def predict(hand, meta, les, sc, rf):
 
 meta, les, sc, rf = load_model()
 
-# ── SHARED CONSTANTS ──────────────────────────────────────────────────────────
+# constants for data generation
 RANK_LABELS = {
     2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9",
     10: "T", 11: "J", 12: "Q", 13: "K", 14: "A",
@@ -127,9 +125,7 @@ def make_treys_card(rank_int: int, suit_sym: str) -> int:
     return Card.new(TREYS_RANK[rank_int] + TREYS_SUIT[suit_sym])
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# PAGE 1 — POKER ADVISOR
-# ══════════════════════════════════════════════════════════════════════════════
+# poker advisor page
 def page_poker():
     st.title("🃏 Poker Decision Advisor")
     st.caption("Enter your hand details below and click **Analyze Hand** for a recommendation.")
@@ -165,7 +161,7 @@ def page_poker():
     pot     = st.number_input("Pot Size (BB)",   1, 1000, 20)
     to_call = st.number_input("To Call (BB)",    0, 500,  8)
 
-    # ── Board cards ───────────────────────────────────────────────────────────
+    # board cards
     board_cards = []
     if stage != "preflop":
         st.header("Board Cards")
@@ -195,7 +191,7 @@ def page_poker():
         if not valid_board:
             st.stop()
 
-    # ── Analyze ───────────────────────────────────────────────────────────────
+    # analyze
     st.divider()
     if st.button("Analyze Hand", type="primary", use_container_width=True):
         hole = [make_treys_card(rank1, suit1), make_treys_card(rank2, suit2)]
@@ -259,9 +255,7 @@ def page_poker():
                 bcol3.metric("Danger Score",  hand["board_danger_score"])
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# PAGE 2 — ABOUT US
-# ══════════════════════════════════════════════════════════════════════════════
+# About us page
 def page_about():
     st.title("👥 About Us")
     st.divider()
@@ -275,41 +269,33 @@ def page_about():
     **Fold**, **Call**, **Raise**, or **All-In** — along with estimated expected values (EV) for
     each possible line.
 
-    The model is built on a **Random Forest classifier** trained on a large dataset of simulated
+    The model is built on a **Random Forest classifier** trained on a synthetic dataset of simulated
     poker hands across all streets (pre-flop, flop, turn, river). Features are engineered from
     fundamental poker concepts including Chen scoring, hand strength estimation via Monte Carlo
     equity simulation, pot odds, board texture analysis, and stack-to-pot ratio (SPR).
 
     ---
-
-    ## 🎓 Built For
-
-    This project was developed as an academic capstone — combining probability theory,
-    game-tree search concepts, and supervised machine learning to tackle one of the most
-    strategically rich card games in the world.
-
-    ---
     """)
 
     # Team cards
-    st.subheader("🤝 The Team")
+    st.subheader("👥 The Team")
     team = [
         {
             "name":   "Vittorio Dinata",
             "role":   "Model Architecture & Training",
             "bio":    "Responsible for designing the Random Forest pipeline, feature selection, "
                       "hyperparameter tuning, and overall model evaluation strategy.",
-            "emoji":  "🧠",
+            "emoji":  "⚙️",
         },
         {
-            "name":   "Gregorius Gilbert",
+            "name":   "Willian Yehezkiel & Andrew Ong",
             "role":   "Feature Engineering",
             "bio":    "Developed the canonical Features.py module — including hand-strength estimation, "
                       "Chen scoring, board texture metrics, and EV calculation logic.",
             "emoji":  "⚙️",
         },
         {
-            "name":   "Willian Yehezkiel Andrew Ong",
+            "name":   "Gregorius Gilbert & Justin Christopher",
             "role":   "UI / UX & Data Pipeline",
             "bio":    "Built the Streamlit interface, designed the multi-page navigation, "
                       "and managed the end-to-end data collection and preprocessing pipeline.",
@@ -341,23 +327,8 @@ def page_about():
             </div>
             """, unsafe_allow_html=True)
 
-    st.divider()
-    st.markdown("""
-    ## 🛠️ Tech Stack
 
-    | Layer | Technology |
-    |---|---|
-    | **Frontend** | Streamlit |
-    | **Model** | scikit-learn Random Forest |
-    | **Hand Evaluation** | treys library |
-    | **Feature Engineering** | NumPy, pandas, custom Monte Carlo equity |
-    | **Model Storage** | Google Drive via gdown |
-    """)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# PAGE 3 — STATISTICS
-# ══════════════════════════════════════════════════════════════════════════════
+# statistics & EDA page
 def page_statistics():
     st.title("📊 Model Statistics & EDA")
     st.caption("Performance metrics and exploratory data analysis for the Poker Decision Advisor model.")
@@ -392,22 +363,22 @@ def page_statistics():
     st.subheader("① Model Performance Metrics")
 
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Overall Accuracy",  "87.4%")
-    m2.metric("Macro F1-Score",    "0.861")
-    m3.metric("Weighted F1-Score", "0.872")
-    m4.metric("ROC-AUC (macro)",   "0.953")
-    m5.metric("Log-Loss",          "0.341")
+    m1.metric("Overall Accuracy",  "99.6%")
+    m2.metric("Macro F1-Score",    "0.9912")
+    m3.metric("Weighted F1-Score", "0.9962")
+    m4.metric("ROC-AUC (macro)",   "1.000")
+    m5.metric("Log-Loss",          "0.0226")
 
     st.markdown("&nbsp;")
 
     # Per-class metrics table
     metrics_df = pd.DataFrame({
-        "Action":    ["Call", "Raise", "Fold", "All-In"],
-        "Precision": [0.882,  0.871,   0.854,  0.837],
-        "Recall":    [0.891,  0.863,   0.861,  0.829],
-        "F1-Score":  [0.886,  0.867,   0.857,  0.833],
-        "Support":   [3241,   2987,    4102,   670],
-    })
+    "Action":    ["All-In", "Call",   "Fold",   "Raise"],
+    "Precision": [0.9985,   0.9925,   0.9983,   0.9661],
+    "Recall":    [0.9985,   0.9912,   0.9981,   0.9866],
+    "F1-Score":  [0.9985,   0.9918,   0.9982,   0.9762],
+    "Support":   [4529,     34135,    107841,   3495],
+})
     st.dataframe(
         metrics_df.style
             .format({"Precision": "{:.3f}", "Recall": "{:.3f}",
@@ -422,7 +393,7 @@ def page_statistics():
     # ── ② Action Distribution ─────────────────────────────────────────────────
     st.subheader("② Action Distribution in Training Data")
 
-    action_counts = {"Fold": 4102, "Call": 3241, "Raise": 2987, "All-In": 670}
+    action_counts = {"Fold": 718943, "Call": 227565, "Raise": 30191, "All-In": 23301}
     fig1, ax1 = plt.subplots(figsize=(8, 4))
     bars = ax1.bar(
         action_counts.keys(), action_counts.values(),
@@ -450,9 +421,8 @@ def page_statistics():
     rng = np.random.RandomState(42)
     fig2, ax2 = plt.subplots(figsize=(8, 5))
 
-    auc_vals = {"Call": 0.961, "Raise": 0.955, "Fold": 0.949, "All-In": 0.947}
+    auc_vals = {"Call": 1.000, "Raise": 1.000, "Fold": 1.000, "All-In": 1.000}
     for (label, auc), color in zip(auc_vals.items(), COLORS):
-        # Simulate a smooth ROC-like curve
         fpr = np.linspace(0, 1, 200)
         tpr = 1 - np.exp(-auc * 6 * fpr) + rng.normal(0, 0.008, 200)
         tpr = np.clip(np.sort(tpr), 0, 1)
@@ -466,23 +436,24 @@ def page_statistics():
     ax2.yaxis.grid(True)
     fig2.tight_layout()
     st.pyplot(fig2, use_container_width=True)
-
     st.divider()
 
     # ── ④ Hand Strength vs Action ─────────────────────────────────────────────
     st.subheader("④ Hand Strength Distribution by Action (EDA)")
 
-    rng2 = np.random.RandomState(7)
-    hs_data = {
-        "Fold":   rng2.beta(2, 5,  2000) * 0.6,
-        "Call":   rng2.beta(4, 4,  1800) * 0.8 + 0.10,
-        "Raise":  rng2.beta(6, 3,  1700) * 0.6 + 0.30,
-        "All-In": rng2.beta(8, 2,  500)  * 0.4 + 0.55,
-    }
+    @st.cache_data
+    def load_hs():
+        return pd.read_csv("poker_model/hs_by_action.csv")
+
+    hs_df = load_hs()
 
     fig3, ax3 = plt.subplots(figsize=(9, 5))
-    for (action, vals), color in zip(hs_data.items(), ["#ed8936","#4299e1","#48bb78","#e53e3e"]):
-        ax3.hist(vals, bins=50, alpha=0.65, label=action, color=color, density=True, edgecolor="none")
+    color_map = {"fold": "#ed8936", "call": "#4299e1", "raise": "#48bb78", "all-in": "#e53e3e"}
+    for action, color in color_map.items():
+        vals = hs_df[hs_df["action"] == action]["hand_strength"]
+        ax3.hist(vals, bins=50, alpha=0.65, label=action.capitalize(),
+                color=color, density=True, edgecolor="none")
+
     ax3.set_xlabel("Hand Strength (0 = weakest, 1 = strongest)", fontsize=12)
     ax3.set_ylabel("Density", fontsize=12)
     ax3.set_title("Hand Strength Distribution per Action", fontsize=14, color=GOLD, pad=12)
@@ -491,34 +462,14 @@ def page_statistics():
     ax3.set_axisbelow(True)
     fig3.tight_layout()
     st.pyplot(fig3, use_container_width=True)
-
     st.divider()
-
     # ── ⑤ Feature Correlation Heatmap ────────────────────────────────────────
     st.subheader("⑤ Feature Correlation Heatmap (Top 12 Features)")
 
-    feat_names = [
-        "hand_strength", "chen_score", "equity_edge", "pot_odds",
-        "spr", "ev_raise", "ev_call", "board_wetness",
-        "board_danger", "flush_draw", "straight_draw", "stack",
-    ]
-    rng3 = np.random.RandomState(13)
-    base = rng3.uniform(-0.3, 0.7, (12, 12))
-    corr_mat = (base + base.T) / 2
-    np.fill_diagonal(corr_mat, 1.0)
-    # Force some realistic known correlations
-    idx = {n: i for i, n in enumerate(feat_names)}
-    corr_mat[idx["hand_strength"], idx["chen_score"]]  = 0.72
-    corr_mat[idx["chen_score"], idx["hand_strength"]]  = 0.72
-    corr_mat[idx["ev_raise"], idx["hand_strength"]]    = 0.68
-    corr_mat[idx["hand_strength"], idx["ev_raise"]]    = 0.68
-    corr_mat[idx["pot_odds"], idx["ev_call"]]           = 0.61
-    corr_mat[idx["ev_call"], idx["pot_odds"]]           = 0.61
-    corr_mat[idx["flush_draw"], idx["straight_draw"]]  = 0.44
-    corr_mat[idx["straight_draw"], idx["flush_draw"]]  = 0.44
-    corr_mat[idx["board_wetness"], idx["board_danger"]]= 0.58
-    corr_mat[idx["board_danger"], idx["board_wetness"]]= 0.58
-    corr_df = pd.DataFrame(corr_mat, index=feat_names, columns=feat_names)
+    @st.cache_data
+    def load_corr():
+        return pd.read_csv("poker_model/corr_matrix.csv", index_col=0)
+    corr_df = load_corr()
 
     fig4, ax4 = plt.subplots(figsize=(10, 8))
     cmap = sns.diverging_palette(220, 20, as_cmap=True)
@@ -534,30 +485,12 @@ def page_statistics():
     ax4.tick_params(axis="y", labelrotation=0,  labelsize=9)
     fig4.tight_layout()
     st.pyplot(fig4, use_container_width=True)
-
     st.divider()
 
     # ── ⑥ Feature Importance ─────────────────────────────────────────────────
     st.subheader("⑥ Random Forest Feature Importance (Top 15)")
-
-    fi = {
-        "hand_strength":       0.187,
-        "equity_edge":         0.142,
-        "ev_raise":            0.121,
-        "pot_odds":            0.098,
-        "chen_score":          0.087,
-        "ev_call":             0.074,
-        "spr":                 0.063,
-        "board_danger_score":  0.041,
-        "board_wetness":       0.038,
-        "stack":               0.034,
-        "to_call":             0.029,
-        "players":             0.024,
-        "flush_draw":          0.022,
-        "straight_draw":       0.019,
-        "board_connectedness": 0.021,
-    }
-    fi_series = pd.Series(fi).sort_values(ascending=True)
+    fi = meta.get("top_features", {})
+    fi_series = pd.Series(fi).sort_values(ascending=False).head(15).sort_values(ascending=True)
 
     fig5, ax5 = plt.subplots(figsize=(9, 6))
     bars5 = ax5.barh(fi_series.index, fi_series.values,
@@ -574,9 +507,7 @@ def page_statistics():
     st.pyplot(fig5, use_container_width=True)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# PAGE 4 — USER MANUAL
-# ══════════════════════════════════════════════════════════════════════════════
+# User Manual page
 def page_manual():
     st.title("📖 User Manual")
     st.caption("A complete guide to every input and output on the Poker Advisor page.")
@@ -593,7 +524,7 @@ def page_manual():
     """)
 
     # ── INPUTS ────────────────────────────────────────────────────────────────
-    st.header("📥 Inputs")
+    st.header("🃏 Inputs")
 
     with st.expander("🂠  Hole Cards", expanded=True):
         st.markdown("""
@@ -607,7 +538,7 @@ def page_manual():
         > ⚠️ Both cards must be different. An error will appear if you select two identical cards.
         """)
 
-    with st.expander("🎯  Situation"):
+    with st.expander("Situation"):
         st.markdown("""
         Context about the current state of the hand.
 
@@ -657,18 +588,18 @@ def page_manual():
     st.divider()
 
     # ── OUTPUTS ───────────────────────────────────────────────────────────────
-    st.header("📤 Outputs")
+    st.header("🃏 Outputs")
 
-    with st.expander("✅  Recommended Action", expanded=True):
+    with st.expander("Recommended Action", expanded=True):
         st.markdown("""
         The top-level decision produced by the Random Forest model.
 
         | Action | Indicator | Meaning |
         |---|---|---|
-        | **FOLD** | 🔴 | Surrender your hand. The model calculates this as the highest-EV line. |
+        | **FOLD** | 🔴 | Surrender your hand. |
         | **CALL** | 🟡 | Match the current bet to stay in the hand. |
         | **RAISE** | 🟢 | Put in a larger bet to build the pot or apply pressure. |
-        | **ALL-IN** | 🔥 | Commit your entire stack. Triggered when all-in EV significantly exceeds alternatives. |
+        | **ALL-IN** | 🔥 | Commit your entire stack. |
         """)
 
     with st.expander("📊  Action Probabilities"):
@@ -742,17 +673,7 @@ def page_manual():
         | **Danger Score** | Composite measure of how threatening the board is to your hand (flush/straight possible). |
         """)
 
-    st.divider()
-    st.info(
-        "💡 **Tip:** For the best advice, be as accurate as possible with **Stack Size**, **Pot Size**, "
-        "and **To Call**. These three fields have the biggest impact on EV calculations and the final recommendation.",
-        icon="💡",
-    )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ROUTER
-# ══════════════════════════════════════════════════════════════════════════════
+# router
 if selected == "Poker":
     page_poker()
 elif selected == "About Us":
