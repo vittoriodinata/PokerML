@@ -401,7 +401,7 @@ def page_statistics():
     # ── ② Action Distribution ─────────────────────────────────────────────────
     st.subheader("② Action Distribution in Training Data")
 
-    action_counts = {"Fold": 656484, "Call": 230070, "All-In": 59646, "Raise": 53800}
+    action_counts = {"Fold": 656484, "Call": 230070, "All-In":53800 , "Raise": 59646}
     fig1, ax1 = plt.subplots(figsize=(8, 4))
     bars = ax1.bar(
         action_counts.keys(), action_counts.values(),
